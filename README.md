@@ -2,7 +2,7 @@
 
 This repository provides the downstream classification evaluation code for **LH-MAE (Lightweight Hyperspectral Masked Autoencoder)** with **MR-MAE as the reference/teacher encoder**. The pretrained LH-MAE student is transferred to five hyperspectral image classification benchmarks: Pavia University (UP), HanChuan (HC), HongHu (HH), Indian Pines (IN), and Houston (HU).
 
-The commands below **fine-tune and evaluate** a pretrained student on each benchmark; they are not inference-only commands. The teacher model and Stage 1/Stage 2 pretraining pipelines are not required to run this downstream evaluation. Electrolyzers (EL) is not included in this release.
+The commands below **fine-tune and evaluate** a pretrained student on each benchmark; they are not inference-only commands. The teacher model and Stage 1/Stage 2 pretraining pipelines are not required to run this downstream evaluation.
 
 ## Reported classification performance
 
@@ -44,8 +44,7 @@ The requirements file uses the official CUDA 11.8 PyTorch package index. A compa
 │   ├── __init__.py
 │   └── pos_embed.py
 ├── outputs/
-│   └── mrmae_lhmae_stage2_6gpu/
-│       └── student_stage2.pth
+│   └── student_stage2.pth
 ├── visualized_results/
 ├── requirements.txt
 └── README.md
@@ -54,10 +53,20 @@ The requirements file uses the official CUDA 11.8 PyTorch package index. A compa
 Place the pretrained student checkpoint at:
 
 ```text
-outputs/mrmae_lhmae_stage2_6gpu/student_stage2.pth
+outputs/student_stage2.pth
 ```
 
-The benchmark datasets are **not included** in this repository. Obtain them from their respective providers, follow their redistribution terms, and organize the files as follows:
+The benchmark datasets are **not included** in this repository. Obtain them from their respective providers and organize the files as shown below.
+
+| Benchmark | Dataset provider |
+| :-- | :-- |
+| Indian Pines (IN) | [EHU Hyperspectral Remote Sensing Scenes](https://www.ehu.eus/ccwintco/index.php/Hyperspectral_Remote_Sensing_Scenes) |
+| Pavia University (UP) | [EHU Hyperspectral Remote Sensing Scenes](https://www.ehu.eus/ccwintco/index.php/Hyperspectral_Remote_Sensing_Scenes) |
+| HanChuan (HC) | [Wuhan University WHU-Hi](https://rsidea.whu.edu.cn/e-resource_WHUHi_sharing.htm) |
+| HongHu (HH) | [Wuhan University WHU-Hi](https://rsidea.whu.edu.cn/e-resource_WHUHi_sharing.htm) |
+| Houston (HU) | [2013 IEEE GRSS Data Fusion Contest](https://www.grss-ieee.org/community/technical-committees/2013-ieee-grss-data-fusion-contest/) |
+
+**Note:** The dataset filenames and internal MATLAB variable names supplied by these sources may differ from those expected below. In particular, the Houston loader expects a combined `Houston_official.mat` file containing the official `TR` and `TE` maps. Prepare the downloaded data in the format required by the loader, while preserving the official split and the source providers' usage terms.
 
 ```text
 datasets/
@@ -91,7 +100,7 @@ mkdir -p "$OUTDIR"
 
 CUDA_VISIBLE_DEVICES=0 python downstream_mrmae_lhmae_all6_official_split.py \
   --dataset UP --data_root datasets \
-  --ckpt outputs/mrmae_lhmae_stage2_6gpu/student_stage2.pth \
+  --ckpt outputs/student_stage2.pth \
   --use_spectral --remove_decoder --spectral_depth 1 \
   --img_size 32 --patch_size 4 --pca_components 10 --train_num 20 \
   --seed 0 --batch_size 16 --max_epoch 150 \
@@ -108,7 +117,7 @@ mkdir -p "$OUTDIR"
 
 CUDA_VISIBLE_DEVICES=0 python downstream_mrmae_lhmae_all6_official_split.py \
   --dataset HC --data_root datasets \
-  --ckpt outputs/mrmae_lhmae_stage2_6gpu/student_stage2.pth \
+  --ckpt outputs/student_stage2.pth \
   --use_spectral --remove_decoder --spectral_depth 1 \
   --img_size 32 --patch_size 4 --pca_components 10 --train_num 50 \
   --seed 0 --batch_size 16 --max_epoch 150 \
@@ -125,7 +134,7 @@ mkdir -p "$OUTDIR"
 
 CUDA_VISIBLE_DEVICES=0 python downstream_mrmae_lhmae_all6_official_split.py \
   --dataset HH --data_root datasets \
-  --ckpt outputs/mrmae_lhmae_stage2_6gpu/student_stage2.pth \
+  --ckpt outputs/student_stage2.pth \
   --use_spectral --remove_decoder --spectral_depth 1 \
   --img_size 32 --patch_size 4 --pca_components 10 --train_num 50 \
   --seed 0 --batch_size 16 --max_epoch 150 \
@@ -142,7 +151,7 @@ mkdir -p "$OUTDIR"
 
 CUDA_VISIBLE_DEVICES=0 python downstream_mrmae_lhmae_all6_official_split.py \
   --dataset IN --data_root datasets \
-  --ckpt outputs/mrmae_lhmae_stage2_6gpu/student_stage2.pth \
+  --ckpt outputs/student_stage2.pth \
   --use_spectral --remove_decoder --spectral_depth 1 \
   --img_size 32 --patch_size 4 --pca_components 10 --train_num 10 \
   --seed 0 --batch_size 16 --max_epoch 150 \
@@ -153,7 +162,7 @@ CUDA_VISIBLE_DEVICES=0 python downstream_mrmae_lhmae_all6_official_split.py \
 
 ### 5. Houston (HU)
 
-Houston follows the official training/test split. As requested, this benchmark uses **60 epochs** rather than 150; evaluations are scheduled at epochs 30 and 60.
+Houston follows the official training/test split and uses **60 epochs**, with evaluations scheduled at epochs 30 and 60.
 
 ```bash
 OUTDIR="outputs/HU_MRMAE_LHMAE_paper_split/seed_0"
@@ -161,7 +170,7 @@ mkdir -p "$OUTDIR"
 
 CUDA_VISIBLE_DEVICES=0 python downstream_mrmae_lhmae_all6_official_split.py \
   --dataset HU --data_root datasets \
-  --ckpt outputs/mrmae_lhmae_stage2_6gpu/student_stage2.pth \
+  --ckpt outputs/student_stage2.pth \
   --use_spectral --remove_decoder --spectral_depth 1 \
   --img_size 32 --patch_size 4 --pca_components 10 \
   --seed 0 --batch_size 16 --max_epoch 60 \
@@ -172,7 +181,27 @@ CUDA_VISIBLE_DEVICES=0 python downstream_mrmae_lhmae_all6_official_split.py \
 
 ## Visualized results
 
-Classification visualizations and predicted maps are provided in the [`visualized_results/`](./visualized_results/) directory. The exact image filenames are repository-specific; once the files are organized, their Markdown image links can be added here to display the maps directly in the README.
+The following classification visualizations are stored in [`visualized_results/`](./visualized_results/) and displayed here in the same order as the benchmark commands.
+
+### Pavia University (UP)
+
+![Pavia University classification overview](./visualized_results/UP_overview.png)
+
+### HanChuan (HC)
+
+![HanChuan classification overview](./visualized_results/HC_overview.png)
+
+### HongHu (HH)
+
+![HongHu classification overview](./visualized_results/HH_overview.png)
+
+### Indian Pines (IN)
+
+![Indian Pines classification overview](./visualized_results/IN_overview.png)
+
+### Houston (HU)
+
+![Houston classification overview](./visualized_results/HU_overview.png)
 
 ## Notes on reproducibility
 
