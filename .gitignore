@@ -1,0 +1,16 @@
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+.ipynb_checkpoints/
+
+# Datasets
+/datasets/
+
+# Experiment outputs
+/outputs/*
+!/outputs/student_stage2.pth
+
+# Temporary files
+*.log
+*.zip
