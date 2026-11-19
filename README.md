@@ -6,10 +6,16 @@ The commands below **fine-tune and evaluate** a pretrained student on each bench
 
 ## Reported classification performance
 
-| Metric | Indian Pines | Pavia University | Houston | HongHu | HanChuan |
-| :-- | --: | --: | --: | --: | --: |
-| Overall Accuracy (OA, %) | 83.87 | 91.90 | 79.50 | 93.43 | 93.86 |
-| Parameters (M) | 6.107 | 6.107 | 6.107 | 6.107 | 6.107 |
+The following table compares the **MR-MAE reference/teacher** with the **LH-MAE student** on five downstream classification benchmarks. Overall Accuracy (OA) is reported in percent, and parameters are reported in millions (M).
+
+| Model | Metric | Indian Pines | Pavia University | Houston | HongHu | HanChuan |
+| :-- | :-- | --: | --: | --: | --: | --: |
+| MR-MAE (teacher) | OA (%) | 74.91 | 91.12 | 82.61 | 95.29 | 94.73 |
+| LH-MAE (student) | OA (%) | 83.87 | 91.90 | 79.50 | 93.43 | 93.86 |
+| MR-MAE (teacher) | Parameters (M) | 210.194 | 210.193 | 210.194 | 210.196 | 210.194 |
+| LH-MAE (student) | Parameters (M) | 6.107 | 6.107 | 6.107 | 6.107 | 6.107 |
+
+The released downstream commands use only the pretrained LH-MAE student; the MR-MAE teacher is shown for reference and is not loaded during fine-tuning or evaluation.
 
 ## Environment and installation
 
