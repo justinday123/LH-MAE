@@ -55,7 +55,6 @@ downstream_mrmae_lhmae_hypersigma_protocol.py
 """
 
 import os
-import re
 import time
 import argparse
 import random
@@ -65,7 +64,6 @@ from typing import Tuple, Dict, Any, List, Set
 import numpy as np
 import scipy.io as sio
 import matplotlib.pyplot as plt
-from PIL import Image
 
 import torch
 import torch.nn as nn
@@ -372,380 +370,6 @@ def load_dataset(data_root: str, name: str) -> Tuple[np.ndarray, np.ndarray, Dic
 
     return cube.astype(np.float32), gt, meta
 
-
-# =================================================
-# EL scene loader and preprocessing (HyperSIGMA original implementation)
-# =================================================
-_ENVI_DTYPE = {
-    1: np.uint8,
-    2: np.int16,
-    3: np.int32,
-    4: np.float32,
-    5: np.float64,
-    12: np.uint16,
-    13: np.uint32,
-    14: np.int64,
-    15: np.uint64,
-}
-
-
-def _parse_envi_value(v: str):
-    v = v.strip()
-    if v.startswith("{") and v.endswith("}"):
-        inner = v[1:-1].strip()
-        if inner == "":
-            return []
-        parts = [p.strip() for p in inner.split(",")]
-        out = []
-        for p in parts:
-            if re.fullmatch(r"[-+]?\d+", p):
-                out.append(int(p))
-            else:
-                try:
-                    out.append(float(p))
-                except Exception:
-                    out.append(p.strip('"').strip("'"))
-        return out
-    if re.fullmatch(r"[-+]?\d+", v):
-        return int(v)
-    try:
-        return float(v)
-    except Exception:
-        return v.strip('"').strip("'")
-
-
-def load_envi_hdr(hdr_path: str) -> dict:
-    with open(hdr_path, "r", encoding="utf-8", errors="ignore") as f:
-        text = f.read()
-
-    lines = [ln.strip() for ln in text.splitlines() if ln.strip()]
-    if lines and lines[0].upper().startswith("ENVI"):
-        lines = lines[1:]
-
-    merged = []
-    buf = ""
-    in_brace = False
-    for ln in lines:
-        if "=" in ln and not in_brace:
-            if buf:
-                merged.append(buf)
-                buf = ""
-            buf = ln
-            if "{" in ln and "}" not in ln:
-                in_brace = True
-        else:
-            buf += " " + ln
-            if in_brace and "}" in ln:
-                in_brace = False
-                merged.append(buf)
-                buf = ""
-    if buf:
-        merged.append(buf)
-
-    hdr = {}
-    for ln in merged:
-        if "=" not in ln:
-            continue
-        k, v = ln.split("=", 1)
-        hdr[k.strip().lower()] = _parse_envi_value(v.strip())
-
-    hdr.setdefault("interleave", "bsq")
-    hdr.setdefault("byte order", 0)
-    hdr.setdefault("header offset", 0)
-    return hdr
-
-
-def load_envi_img(img_path: str, hdr: dict) -> np.ndarray:
-    W = int(hdr["samples"])
-    H = int(hdr["lines"])
-    C = int(hdr["bands"])
-    dt_code = int(hdr["data type"])
-    interleave = str(hdr.get("interleave", "bsq")).lower()
-    byte_order = int(hdr.get("byte order", 0))
-    offset = int(hdr.get("header offset", 0))
-
-    if dt_code not in _ENVI_DTYPE:
-        raise ValueError(f"[EL][ENVI] Unsupported data type code: {dt_code}")
-    dtype = _ENVI_DTYPE[dt_code]
-
-    dt = np.dtype(dtype)
-    dt = dt.newbyteorder(">" if byte_order == 1 else "<")
-
-    n = H * W * C
-    with open(img_path, "rb") as f:
-        if offset > 0:
-            f.seek(offset, 0)
-        arr = np.fromfile(f, dtype=dt, count=n)
-
-    if arr.size != n:
-        raise RuntimeError(f"[EL][ENVI] file too small? read={arr.size}, expected={n} ({img_path})")
-
-    if interleave == "bsq":
-        cube = arr.reshape((C, H, W)).transpose(1, 2, 0)
-    elif interleave == "bil":
-        cube = arr.reshape((H, C, W)).transpose(0, 2, 1)
-    elif interleave == "bip":
-        cube = arr.reshape((H, W, C))
-    else:
-        raise ValueError(f"[EL][ENVI] Unsupported interleave: {interleave}")
-
-    return cube.astype(np.float32)
-
-
-def load_gt_png(gt_path: str) -> np.ndarray:
-    img = Image.open(gt_path)
-    arr = np.array(img)
-    if arr.ndim == 2:
-        return arr.astype(np.int64)
-    if arr.ndim == 3 and arr.shape[2] >= 3:
-        rgb = arr[:, :, :3].astype(np.uint8)
-        flat = rgb.reshape(-1, 3)
-        uniq, inv = np.unique(flat, axis=0, return_inverse=True)
-        bg = np.array([0, 0, 0], dtype=np.uint8)
-        bg_idx = None
-        for i, c in enumerate(uniq):
-            if np.all(c == bg):
-                bg_idx = i
-                break
-        mapped = inv.reshape(rgb.shape[0], rgb.shape[1]).astype(np.int64)
-        if bg_idx is not None and bg_idx != 0:
-            a = mapped.copy()
-            a[mapped == 0] = -999
-            a[mapped == bg_idx] = 0
-            a[a == -999] = bg_idx
-            mapped = a
-        return mapped
-    raise ValueError(f"[EL] Unsupported GT.png shape: {arr.shape}")
-
-
-def list_el_sample_ids(data_root: str) -> List[int]:
-    data_root = os.path.abspath(data_root)
-    if not os.path.isdir(data_root):
-        raise FileNotFoundError(f"[EL] data_root not found: {data_root}")
-    ids = []
-    for name in os.listdir(data_root):
-        p = os.path.join(data_root, name)
-        if os.path.isdir(p) and name.isdigit():
-            ids.append(int(name))
-    return sorted(ids)
-
-
-def load_electrolyzers_all_scenes(data_root: str, crop_bands: bool = True, band_start: int = 50, band_end_drop: int = 40):
-    sample_ids = list_el_sample_ids(data_root)
-    scenes = []
-
-    for sid in sample_ids:
-        sample_dir = os.path.join(os.path.abspath(data_root), str(sid))
-        hdr_path = os.path.join(sample_dir, "HSI.hdr")
-        img_path = os.path.join(sample_dir, "HSI.img")
-        gt_path = os.path.join(sample_dir, "GT.png")
-
-        if not (os.path.exists(hdr_path) and os.path.exists(img_path) and os.path.exists(gt_path)):
-            raise FileNotFoundError(
-                f"[EL] Missing files in {sample_dir}\n"
-                f"  need: HSI.hdr, HSI.img, GT.png"
-            )
-
-        hdr = load_envi_hdr(hdr_path)
-        cube = load_envi_img(img_path, hdr)
-        if crop_bands:
-            cube = cube[:, :, band_start:cube.shape[2] - band_end_drop]
-        gt = load_gt_png(gt_path).astype(np.int64)
-
-        if gt.shape[:2] != cube.shape[:2]:
-            raise RuntimeError(f"[EL] shape mismatch sid={sid}: HSI={cube.shape[:2]} GT={gt.shape}")
-
-        scenes.append({
-            "sample_id": int(sid),
-            "cube": cube.astype(np.float32),
-            "gt": gt.astype(np.int64),
-            "hdr": hdr,
-            "sample_dir": sample_dir,
-        })
-
-    return scenes
-
-
-def spectral_binning_np(hsi: np.ndarray) -> np.ndarray:
-    h, w, bands = hsi.shape
-    if bands % 2 != 0:
-        hsi = hsi[:, :, :-1]
-    return (hsi[:, :, 0::2] + hsi[:, :, 1::2]) / 2.0
-
-
-def normalize_hsi_vector_wise_with_mask(hsi: np.ndarray, mask: np.ndarray) -> np.ndarray:
-    hsi = np.asarray(hsi, dtype=np.float32)
-    mask = np.asarray(mask)
-    normalized_hsi = np.copy(hsi)
-    h, w, b = hsi.shape
-    hsi_reshaped = hsi.reshape(-1, b)
-    masked_indices = np.where(mask.reshape(-1) > 0)[0]
-    if masked_indices.size == 0:
-        return normalized_hsi
-    relevant_pixels = hsi_reshaped[masked_indices]
-    for i in range(relevant_pixels.shape[0]):
-        pixel_vector = relevant_pixels[i]
-        min_val = np.min(pixel_vector)
-        max_val = np.max(pixel_vector)
-        if max_val - min_val > 0:
-            hsi_reshaped[masked_indices[i]] = (relevant_pixels[i] - min_val) / (max_val - min_val)
-        else:
-            hsi_reshaped[masked_indices[i]] = 0
-    normalized_hsi = hsi_reshaped.reshape(h, w, b)
-    normalized_hsi[mask == 0] = 0
-    return normalized_hsi.astype(np.float32)
-
-
-def get_el_scene_split(sample_ids: List[int], test_indices_sorted_positions: List[int]) -> Tuple[List[int], List[int], List[int], List[int]]:
-    n = len(sample_ids)
-    if any((idx < 0 or idx >= n) for idx in test_indices_sorted_positions):
-        raise ValueError(f"[EL] invalid test index in {test_indices_sorted_positions}; valid range is 0..{n-1}")
-
-    test_pos = sorted(set(int(x) for x in test_indices_sorted_positions))
-    train_pos = [i for i in range(n) if i not in test_pos]
-    train_ids = [sample_ids[i] for i in train_pos]
-    test_ids = [sample_ids[i] for i in test_pos]
-    return train_pos, test_pos, train_ids, test_ids
-
-
-def prepare_el_hypersigma_legacy(args):
-    """Legacy HyperSIGMA+LH-MAE EL protocol, copied from user-provided vis2 code.
-
-    Train/test split is scene-wise 44/11 (default), PCA is fitted on *labeled
-    pixels of train scenes only* (unlike IN/UP/HC/HH/HU full-image PCA),
-    scenes are concatenated vertically BEFORE global padding & tiling.
-    """
-    scenes = load_electrolyzers_all_scenes(
-        data_root=args.data_root,
-        crop_bands=(not args.el_disable_repo_band_crop),
-        band_start=args.el_band_start,
-        band_end_drop=args.el_band_end_drop,
-    )
-    sample_ids = [x["sample_id"] for x in scenes]
-    n_scenes = len(sample_ids)
-    print(f"[EL] loaded scenes={n_scenes} sample_ids(first10)={sample_ids[:10]}")
-
-    test_positions = [int(x) for x in args.el_test_indices.split(",") if str(x).strip() != ""]
-    train_pos, test_pos, train_ids, test_ids = get_el_scene_split(sample_ids, test_positions)
-    print(f"[EL split] test_positions={test_pos}")
-    print(f"[EL split] test_sample_ids={test_ids}")
-    print(f"[EL split] train_count={len(train_ids)} test_count={len(test_ids)}")
-
-    proc_scenes = []
-    for i, sc in enumerate(scenes):
-        cube = sc["cube"]
-        gt = sc["gt"]
-        if args.el_use_spectral_binning:
-            cube = spectral_binning_np(cube)
-        if args.el_use_vector_norm:
-            cube = normalize_hsi_vector_wise_with_mask(cube, gt)
-        proc_scenes.append({
-            "sample_id": sc["sample_id"],
-            "cube": cube.astype(np.float32),
-            "gt": gt.astype(np.int64),
-            "is_test_scene": i in set(test_pos),
-        })
-
-    cubes = [x["cube"] for x in proc_scenes]
-    gts = [x["gt"] for x in proc_scenes]
-
-    if args.pca_components > 0:
-        # fit PCA using labeled pixels from train scenes only
-        X_train = []
-        for i in train_pos:
-            cube = cubes[i]
-            gt = gts[i]
-            X_train.append(cube[gt > 0])
-        X_train = np.concatenate(X_train, axis=0).astype(np.float32)
-        from sklearn.decomposition import PCA
-        pca = PCA(n_components=args.pca_components, whiten=False, svd_solver='auto', random_state=args.seed)
-        pca.fit(X_train)
-        cubes = [pca.transform(c.reshape(-1, c.shape[-1])).reshape(c.shape[0], c.shape[1], args.pca_components).astype(np.float32) for c in cubes]
-        in_chans = args.pca_components
-        print(f"[EL][PCA] fit on labeled TRAIN pixels only -> in_chans={in_chans}")
-    else:
-        in_chans = cubes[0].shape[-1]
-        print(f"[EL][PCA] disabled -> in_chans={in_chans}")
-
-    # HyperSIGMA original: do NOT change scene widths before concatenation.
-    # With variable-width scenes, np.concatenate in the original code would fail.
-    # Keep that behavior as the default rather than silently changing the data.
-    widths = [int(c.shape[1]) for c in cubes]
-    if len(set(widths)) != 1:
-        scene_widths = [(int(sc["sample_id"]), width) for sc, width in zip(proc_scenes, widths)]
-        if not args.el_pad_variable_widths:
-            raise ValueError(
-                "[EL][HyperSIGMA original] Scene widths are different: "
-                f"{scene_widths}. The uploaded HyperSIGMA code uses "
-                "np.concatenate(cubes, axis=0) WITHOUT any width correction. "
-                "To reproduce it exactly, use equal-width input scenes. "
-                "To opt in to the previous MR-MAE right-zero-padding behavior, "
-                "add --el_pad_variable_widths to BOTH model experiments."
-            )
-        max_w = max(widths)
-        print(
-            f"[EL][OPT-IN WIDTH PAD] variable widths {sorted(set(widths))}; "
-            f"right-zero-pad to {max_w}. NOT identical to original HyperSIGMA."
-        )
-        cubes = [
-            np.pad(c, ((0, 0), (0, max_w-c.shape[1]), (0, 0)), mode="constant")
-            for c in cubes
-        ]
-        gts = [
-            np.pad(g, ((0, 0), (0, max_w-g.shape[1])), mode="constant")
-            for g in gts
-        ]
-
-    # Exact HyperSIGMA original scene concatenation.
-    data = np.concatenate(cubes, axis=0).astype(np.float32)
-    data_gt = np.concatenate(gts, axis=0).astype(np.int64)
-    H0, W0, _ = data.shape
-    class_num = int(np.max(data_gt))
-
-    scene_ranges = []
-    row_start = 0
-    for i, gt in enumerate(gts):
-        h = gt.shape[0]
-        row_end = row_start + h
-        scene_ranges.append((row_start, row_end))
-        row_start = row_end
-
-    train_mask_hw = np.zeros((H0, W0), dtype=np.int32)
-    test_mask_hw = np.zeros((H0, W0), dtype=np.int32)
-    for i, (rs, re) in enumerate(scene_ranges):
-        if i in train_pos:
-            train_mask_hw[rs:re, :] = data_gt[rs:re, :]
-        if i in test_pos:
-            test_mask_hw[rs:re, :] = data_gt[rs:re, :]
-
-    eval_ids = np.where(test_mask_hw.reshape(-1) > 0)[0].astype(np.int64)
-    test_gt = test_mask_hw.copy()
-    test_samples_gt = test_mask_hw.reshape(-1)
-
-    train_index = np.flatnonzero(train_mask_hw.reshape(-1) > 0).astype(np.int64)
-    test_index = eval_ids
-    if len(np.intersect1d(train_index, test_index)):
-        raise RuntimeError("[EL] Train/Test labeled pixel overlap")
-    print(f"[EL][HyperSIGMA protocol] concat-scenes BEFORE tiling; train pixels={len(train_index)} test pixels={len(test_index)}")
-    print(f"[EL][HyperSIGMA protocol] data={data.shape}, classes={class_num}")
-    return {
-        "data": data,
-        "data_gt": data_gt,
-        "train_map_hw": train_mask_hw,
-        "test_gt": test_gt,
-        "test_samples_gt": test_samples_gt,
-        "train_index": train_index,
-        "test_index": test_index,
-        "split_desc": f"scene_split_train={len(train_ids)}_test={len(test_ids)}",
-        "dataset_tag": "EL_sceneSplit",
-        "pca_mode": "EL_train_labeled_pixels_only_HyperSIGMA_legacy",
-        "extra_meta": {
-            "train_positions": train_pos,
-            "test_positions": test_pos,
-            "train_sample_ids": train_ids,
-            "test_sample_ids": test_ids,
-        },
-    }
 
 # =================================================
 # spectral helper
@@ -2056,14 +1680,14 @@ def main():
     parser = argparse.ArgumentParser()
 
     parser.add_argument("--data_root", type=str, default="datasets",
-                        help="IN/UP/HC/HH/HU subfolders, or Electrolyzers-HSI root for EL")
-    parser.add_argument("--dataset", type=str, default="UP", choices=["IN", "UP", "HC", "HH", "HU", "EL"])
+                        help="Root directory containing IN/UP/HC/HH/HU subfolders")
+    parser.add_argument("--dataset", type=str, default="UP", choices=["IN", "UP", "HC", "HH", "HU"])
 
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
         "--ckpt",
         type=str,
-        default="outputs/mrmae_lhmae_stage2_6gpu/student_stage2.pth",
+        default="outputs/student_stage2.pth",
         help=(
             "Path to pretrained MAE checkpoint. "
             "Use 'none', 'null', 'no', 'random', or '' to skip checkpoint loading "
@@ -2103,7 +1727,7 @@ def main():
     parser.add_argument("--patch_size", type=int, default=8)
     parser.add_argument("--pca_components", type=int, default=10)
     parser.add_argument("--train_num", type=int, default=None,
-                        help="Labeled training pixels per class. Default: IN=10, UP=20, HC=50, HH=50 (HyperSIGMA TPAMI 2025 Appendix D.1); HU uses official TR/TE, EL uses scene split.")
+                        help="Labeled training pixels per class. Default: IN=10, UP=20, HC=50, HH=50 (HyperSIGMA TPAMI 2025 Appendix D.1); HU uses official TR/TE.")
     parser.add_argument("--batch_size", type=int, default=8)
 
     parser.add_argument("--max_epoch", type=int, default=150)
@@ -2156,21 +1780,6 @@ def main():
     parser.add_argument("--macs_tile_index", type=int, default=0,
                         help="Which tile index to use for batch=1 MACs measurement")
 
-    # EL-specific settings reproduce the original HyperSIGMA+LH-MAE EL pipeline.
-    parser.add_argument("--el_test_indices", type=str,
-                        default="0,1,4,5,6,7,8,12,41,46,50",
-                        help="0-based positions among numerically sorted EL scenes")
-    parser.add_argument("--el_disable_repo_band_crop", action="store_true",
-                        help="Disable legacy EL spectral crop [50:-40]")
-    parser.add_argument("--el_band_start", type=int, default=50)
-    parser.add_argument("--el_band_end_drop", type=int, default=40)
-    parser.add_argument("--el_use_spectral_binning", action="store_true")
-    parser.add_argument("--el_use_vector_norm", action="store_true")
-    parser.add_argument(
-        "--el_pad_variable_widths", action="store_true",
-        help="OPT-IN: right-zero-pad EL scenes to widest width; default preserves exact HyperSIGMA concatenation, which requires equal widths",
-    )
-
     args = parser.parse_args()
     # HyperSIGMA TPAMI 2025, Appendix D.1: per-class counts used for
     # the main classification benchmark (HU uses the official TR/TE).
@@ -2185,8 +1794,6 @@ def main():
               f"(HyperSIGMA paper reference={reference_count})")
     elif args.dataset.upper() == "HU":
         print("[PROTOCOL] HU: official TR/TE maps (train_num ignored)")
-    elif args.dataset.upper() == "EL":
-        print("[PROTOCOL] EL: scene-held-out split (train_num ignored)")
     if args.spectral_depth < 1:
         parser.error("--spectral_depth must be >= 1")
     if args.img_size <= 0 or args.patch_size <= 0 or args.img_size % args.patch_size != 0:
@@ -2229,45 +1836,29 @@ def main():
     # --------------------------
     # Load data + preprocessing (keep each original HyperSIGMA protocol)
     # --------------------------
-    if args.dataset.upper() == "EL":
-        el_data = prepare_el_hypersigma_legacy(args)
-        data = el_data["data"]
-        data_gt = el_data["data_gt"]
-        train_index = el_data["train_index"]
-        test_index = el_data["test_index"]
-        test_samples_gt = el_data["test_samples_gt"]
-        test_gt = el_data["test_gt"]
-        train_map_hw_el = el_data["train_map_hw"]
-        split_desc = el_data["split_desc"]
-        dataset_tag = el_data["dataset_tag"]
-        pca_mode = el_data["pca_mode"]
-        extra_meta = el_data["extra_meta"]
-        H0, W0, _ = data.shape
-        class_num = int(np.max(data_gt))
-    else:
-        data, data_gt, meta = load_dataset(args.data_root, args.dataset)
-        H0, W0, _ = data.shape
-        class_num = int(np.max(data_gt))
-        print(f"[DATA] dataset={args.dataset} HWC={data.shape} classes={class_num}")
+    data, data_gt, meta = load_dataset(args.data_root, args.dataset)
+    H0, W0, _ = data.shape
+    class_num = int(np.max(data_gt))
+    print(f"[DATA] dataset={args.dataset} HWC={data.shape} classes={class_num}")
 
-        data, _ = split_data.apply_PCA(data, num_components=pca_components)
-        print(f"[PCA] components={pca_components} => data={data.shape}")
+    data, _ = split_data.apply_PCA(data, num_components=pca_components)
+    print(f"[PCA] components={pca_components} => data={data.shape}")
 
-        gt_flat = data_gt.reshape(-1)
+    gt_flat = data_gt.reshape(-1)
 
-        train_index, val_index, test_index, split_msg = get_train_val_test_indices(
-            args.dataset, data_gt, meta, class_num, args.train_num, args.seed
-        )
-        print(split_msg)
+    train_index, val_index, test_index, split_msg = get_train_val_test_indices(
+        args.dataset, data_gt, meta, class_num, args.train_num, args.seed
+    )
+    print(split_msg)
 
-        train_samples_gt, test_samples_gt, val_samples_gt = create_graph.get_label(
-            gt_flat, train_index.astype(int), val_index.astype(int), test_index.astype(int)
-        )
-        test_gt = test_samples_gt.reshape(H0, W0)
-        split_desc = "official_TRTE" if args.dataset.upper() == "HU" else f"train_num_per_class={args.train_num}"
-        dataset_tag = args.dataset
-        pca_mode = "full_scene_transductive_HyperSIGMA_legacy"
-        extra_meta = {}
+    train_samples_gt, test_samples_gt, val_samples_gt = create_graph.get_label(
+        gt_flat, train_index.astype(int), val_index.astype(int), test_index.astype(int)
+    )
+    test_gt = test_samples_gt.reshape(H0, W0)
+    split_desc = "official_TRTE" if args.dataset.upper() == "HU" else f"train_num_per_class={args.train_num}"
+    dataset_tag = args.dataset
+    pca_mode = "full_scene_transductive_HyperSIGMA_legacy"
+    extra_meta = {}
 
     test_gt_onehot = create_graph.label_to_one_hot(test_gt, class_num)
     test_samples_gt_cpu = torch.from_numpy(test_samples_gt.astype(np.float32)).to(cpu_device)
@@ -2305,9 +1896,7 @@ def main():
     # --------------------------
     # Build official / sparse train map
     # --------------------------
-    if args.dataset.upper() == "EL":
-        train_map_hw = train_map_hw_el
-    elif args.dataset.upper() == "HU":
+    if args.dataset.upper() == "HU":
         train_map_hw = np.asarray(meta["TR"]).astype(np.int32)
         if train_map_hw.ndim == 3 and train_map_hw.shape[-1] == 1:
             train_map_hw = train_map_hw[..., 0]
