@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# LH-MAE downstream classification evaluation
+# Supported benchmarks: IN, UP, HC, HH, HU
 """
 downstream_mrmae_lhmae_hypersigma_protocol.py
 
