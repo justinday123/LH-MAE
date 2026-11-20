@@ -1,8 +1,8 @@
-# LH-MAE: MR-MAE-Referenced Downstream Classification
+# LH-MAE: A Lightweight Hyperspectral Masked Autoencoder Learning Band Correlation
 
 This repository provides the downstream classification evaluation code for **LH-MAE (Lightweight Hyperspectral Masked Autoencoder)** with **MR-MAE as the reference/teacher encoder**. The pretrained LH-MAE student is transferred to five hyperspectral image classification benchmarks: Pavia University (UP), HanChuan (HC), HongHu (HH), Indian Pines (IN), and Houston (HU).
 
-The commands below **fine-tune and evaluate** a pretrained student on each benchmark; they are not inference-only commands. The teacher model and Stage 1/Stage 2 pretraining pipelines are not required to run this downstream evaluation.
+The commands below **fine-tune and evaluate** a pretrained student on each benchmark; they are not inference-only commands.
 
 ## Reported classification performance
 
